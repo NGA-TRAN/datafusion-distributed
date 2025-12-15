@@ -49,6 +49,12 @@ mod tests {
         ctx_distributed.state_ref().write().config_mut().options_mut()
             .execution.target_partitions = 4;
 
+        // Disable hash join single partition threshold to force partitioned joins
+        ctx_distributed.state_ref().write().config_mut().options_mut()
+            .optimizer.hash_join_single_partition_threshold = 0;
+        ctx_distributed.state_ref().write().config_mut().options_mut()
+            .optimizer.hash_join_single_partition_threshold_rows = 0;
+
         // Enable hash join inlist pushdown for dynamic filtering
         ctx_distributed.state_ref().write().config_mut().options_mut()
             .optimizer.hash_join_inlist_pushdown_max_size = 100;
@@ -134,6 +140,12 @@ mod tests {
         // Set target_partitions to 4 (same as distributed context)
         ctx_non_distributed.state_ref().write().config_mut().options_mut()
             .execution.target_partitions = 4;
+
+        // Disable hash join single partition threshold to force partitioned joins (same as distributed context)
+        ctx_non_distributed.state_ref().write().config_mut().options_mut()
+            .optimizer.hash_join_single_partition_threshold = 0;
+        ctx_non_distributed.state_ref().write().config_mut().options_mut()
+            .optimizer.hash_join_single_partition_threshold_rows = 0;
 
         // Register the same tables in non-distributed context
         let dim_options_nd = CsvReadOptions::default()
