@@ -3,7 +3,8 @@
 - test file: `tests/join_time_agg_space_agg.rs`
 - test function: `test_join_with_time_agg_then_space_agg_and_default_task_estimator`
    - See settings there
-   - Using Gene's branch: `gene.bordegaray/2025/12/hash_superset_satisfies_partitioning`
+   - Using PR #19304: `gene.bordegaray/2025/12/hash_partitioning_satisfies_subset`
+   - PR link: https://github.com/apache/datafusion/pull/19304
 
 ### Test data
 
@@ -102,5 +103,8 @@ ORDER BY env, time_bin
 0. MUST: Verify why there is no Dynamic Filtering? CVS files?
 1. MUST: Distributed dim & fact files correctly for partitioned hash join 
 2. MUST: Build custom TaskEstimator 
-3. OPTINAL: Make space aggregation happen in stage1 
+3. OPTIONAL: Make space aggregation happen in stage1
+4. INVESTIGATE: The `repartition_subset_satisfactions` flag from PR #19304 doesn't seem to work in distributed context
+   - Tests show 2-stage plans with repartitioning instead of expected single-stage `mode=SinglePartitioned`
+   - May need to investigate if distributed planner is interfering with this optimization 
 
