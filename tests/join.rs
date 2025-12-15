@@ -63,11 +63,6 @@ mod tests {
         ctx_distributed.state_ref().write().config_mut().options_mut()
             .optimizer.preserve_file_partitions = 1;
 
-        // Enable hash subset satisfaction (from PR #19304)
-        // This allows hash partitioning on a superset of keys to satisfy partitioning requirements
-        ctx_distributed.state_ref().write().config_mut().options_mut()
-            .optimizer.repartition_subset_satisfactions = true;
-
         // Set target_partitions to 4 to create 4 file groups (one per Hive partition: A, B, C, D)
         ctx_distributed.state_ref().write().config_mut().options_mut()
             .execution.target_partitions = 4;
@@ -135,10 +130,6 @@ mod tests {
         // Enable file partitioning preservation in non-distributed context too
         ctx_non_distributed.state_ref().write().config_mut().options_mut()
             .optimizer.preserve_file_partitions = 1;
-
-        // Enable hash subset satisfaction for non-distributed context
-        ctx_non_distributed.state_ref().write().config_mut().options_mut()
-            .optimizer.repartition_subset_satisfactions = true;
 
         // Set target_partitions to 4 to match distributed context
         ctx_non_distributed.state_ref().write().config_mut().options_mut()
