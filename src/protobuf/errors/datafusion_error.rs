@@ -85,6 +85,9 @@ pub struct DataFusionCollectionErrorProto {
 impl DataFusionErrorProto {
     pub fn from_datafusion_error(err: &DataFusionError) -> Self {
         match err {
+            DataFusionError::Ffi(msg) => DataFusionErrorProto {
+                inner: Some(DataFusionErrorInnerProto::External(msg.clone())),
+            },
             DataFusionError::ArrowError(err, msg) => DataFusionErrorProto {
                 inner: Some(DataFusionErrorInnerProto::ArrowError(
                     ArrowErrorProto::from_arrow_error(err, msg.as_ref()),

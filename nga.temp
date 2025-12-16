@@ -1,0 +1,83 @@
+-- 1: Partitioned Hash Join
+
+            SELECT 
+                f.f_dkey,
+                f.timestamp,
+                f.value,
+                d.env,
+                d.service,
+                d.host
+            FROM dim d
+            INNER JOIN fact f ON d.d_dkey = f.f_dkey
+            ORDER BY f.f_dkey, f.timestamp
+
+
+-- 2: Time aggregation (without date-bin yet)
+--    date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
+
+            SELECT  f_dkey, 
+                    timestamp,
+                    MAX(env) AS max_env,
+                    MAX(value) AS max_value
+            FROM
+               (
+                SELECT 
+                    f.f_dkey,
+                    d.env,
+                    d.service,
+                    d.host,
+                    f.timestamp,
+                    f.value
+                FROM dim d
+                INNER JOIN fact f ON d.d_dkey = f.f_dkey
+               ) AS j
+            GROUP BY f_dkey, timestamp
+            ORDER BY f_dkey, timestamp  
+
+-- 2.1: Time aggregation on date_bin
+
+            SELECT  f_dkey, 
+                    date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
+                    MAX(env) AS max_env,
+                    MAX(value) AS max_value
+            FROM
+               (
+                SELECT 
+                    f.f_dkey,
+                    d.env,
+                    d.service,
+                    d.host,
+                    f.timestamp,
+                    f.value
+                FROM dim d
+                INNER JOIN fact f ON d.d_dkey = f.f_dkey
+               ) AS j
+            GROUP BY f_dkey, time_bin
+            ORDER BY f_dkey, time_bin
+
+
+-- 3. Space aggregation
+
+SELECT env, time_bin, AVG(max_bin_val)
+FROM
+(
+    SELECT  f_dkey, 
+            date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
+            MAX(env) AS env,
+            MAX(value) AS max_bin_value
+    FROM
+        (
+        SELECT 
+            f.f_dkey,
+            d.env,
+            d.service,
+            d.host,
+            f.timestamp,
+            f.value
+        FROM dim d
+        INNER JOIN fact f ON d.d_dkey = f.f_dkey
+        ) AS j
+    GROUP BY f_dkey, time_bin
+) AS a
+GROUP BY env, time_bin
+ORDER BY env, time_bin;

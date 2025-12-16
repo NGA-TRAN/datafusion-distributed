@@ -59,6 +59,7 @@ pub enum PartitionIsolatorExec {
 #[derive(Debug)]
 pub struct PartitionIsolatorPendingExec {
     input: Arc<dyn ExecutionPlan>,
+    custom_partition_groups: Option<Vec<Vec<usize>>>,
 }
 
 #[derive(Debug)]
@@ -66,11 +67,32 @@ pub struct PartitionIsolatorReadyExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     pub(crate) properties: PlanProperties,
     pub(crate) n_tasks: usize,
+    pub(crate) custom_partition_groups: Option<Vec<Vec<usize>>>,
 }
 
 impl PartitionIsolatorExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        PartitionIsolatorExec::Pending(PartitionIsolatorPendingExec { input })
+        PartitionIsolatorExec::Pending(PartitionIsolatorPendingExec {
+            input,
+            custom_partition_groups: None,
+        })
+    }
+
+    /// Create a new PartitionIsolatorExec with custom partition groups.
+    /// 
+    /// # Arguments
+    /// * `input` - The input execution plan
+    /// * `partition_groups` - Explicit partition assignments per task.
+    ///   Example: `vec![vec![0], vec![1, 2, 3]]` means task 0 gets partition 0,
+    ///   and task 1 gets partitions 1, 2, 3.
+    pub fn new_with_partition_groups(
+        input: Arc<dyn ExecutionPlan>,
+        partition_groups: Vec<Vec<usize>>,
+    ) -> Self {
+        PartitionIsolatorExec::Pending(PartitionIsolatorPendingExec {
+            input,
+            custom_partition_groups: Some(partition_groups),
+        })
     }
 
     pub(crate) fn ready(&self, n_tasks: usize) -> Result<Self, DataFusionError> {
@@ -79,11 +101,22 @@ impl PartitionIsolatorExec {
         };
 
         let input_partitions = pending.input.properties().partitioning.partition_count();
-        if n_tasks > input_partitions {
-            return Err(limit_tasks_err(input_partitions));
-        }
+        
+        // Determine the actual n_tasks based on custom groups or parameter
+        let actual_n_tasks = if let Some(ref groups) = pending.custom_partition_groups {
+            groups.len()
+        } else {
+            if n_tasks > input_partitions {
+                return Err(limit_tasks_err(input_partitions));
+            }
+            n_tasks
+        };
 
-        let partition_count = Self::partition_groups(input_partitions, n_tasks)[0].len();
+        let partition_count = Self::partition_groups(
+            input_partitions,
+            actual_n_tasks,
+            pending.custom_partition_groups.as_ref(),
+        )[0].len();
 
         let properties = pending
             .input
@@ -94,7 +127,8 @@ impl PartitionIsolatorExec {
         Ok(Self::Ready(PartitionIsolatorReadyExec {
             input: pending.input.clone(),
             properties,
-            n_tasks,
+            n_tasks: actual_n_tasks,
+            custom_partition_groups: pending.custom_partition_groups.clone(),
         }))
     }
 
@@ -105,7 +139,17 @@ impl PartitionIsolatorExec {
         Self::new(input).ready(n_tasks)
     }
 
-    pub(crate) fn partition_groups(input_partitions: usize, n_tasks: usize) -> Vec<Vec<usize>> {
+    pub(crate) fn partition_groups(
+        input_partitions: usize,
+        n_tasks: usize,
+        custom_groups: Option<&Vec<Vec<usize>>>,
+    ) -> Vec<Vec<usize>> {
+        // If custom groups are provided, use them
+        if let Some(groups) = custom_groups {
+            return groups.clone();
+        }
+
+        // Otherwise, use the default even distribution algorithm
         let q = input_partitions / n_tasks;
         let r = input_partitions % n_tasks;
 
@@ -124,8 +168,9 @@ impl PartitionIsolatorExec {
         input_partitions: usize,
         task_i: usize,
         n_tasks: usize,
+        custom_groups: Option<&Vec<Vec<usize>>>,
     ) -> Vec<usize> {
-        Self::partition_groups(input_partitions, n_tasks)[task_i].clone()
+        Self::partition_groups(input_partitions, n_tasks, custom_groups)[task_i].clone()
     }
 
     pub(crate) fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -142,8 +187,11 @@ impl DisplayAs for PartitionIsolatorExec {
             return write!(f, "PartitionIsolatorExec");
         };
         let input_partitions = self.input().output_partitioning().partition_count();
-        let partition_groups =
-            PartitionIsolatorExec::partition_groups(input_partitions, self_ready.n_tasks);
+        let partition_groups = PartitionIsolatorExec::partition_groups(
+            input_partitions,
+            self_ready.n_tasks,
+            self_ready.custom_partition_groups.as_ref(),
+        );
 
         let n: usize = partition_groups.iter().map(|v| v.len()).sum();
         let mut partitions = vec![];
@@ -194,9 +242,20 @@ impl ExecutionPlan for PartitionIsolatorExec {
         }
 
         Ok(Arc::new(match self.as_ref() {
-            PartitionIsolatorExec::Pending(_) => Self::new(children[0].clone()),
+            PartitionIsolatorExec::Pending(pending) => {
+                if let Some(ref groups) = pending.custom_partition_groups {
+                    Self::new_with_partition_groups(children[0].clone(), groups.clone())
+                } else {
+                    Self::new(children[0].clone())
+                }
+            }
             PartitionIsolatorExec::Ready(ready) => {
-                Self::new(children[0].clone()).ready(ready.n_tasks)?
+                let new_exec = if let Some(ref groups) = ready.custom_partition_groups {
+                    Self::new_with_partition_groups(children[0].clone(), groups.clone())
+                } else {
+                    Self::new(children[0].clone())
+                };
+                new_exec.ready(ready.n_tasks)?
             }
         }))
     }
@@ -218,6 +277,7 @@ impl ExecutionPlan for PartitionIsolatorExec {
             input_partitions,
             task_context.task_index,
             task_context.task_count,
+            self_ready.custom_partition_groups.as_ref(),
         );
 
         // if our partition group is [7,8,9] and we are asked for parittion 1,
@@ -251,28 +311,45 @@ mod tests {
     #[test]
     fn test_partition_groups() {
         assert_eq!(
-            PartitionIsolatorExec::partition_groups(2, 1),
+            PartitionIsolatorExec::partition_groups(2, 1, None),
             vec![vec![0, 1]]
         );
         assert_eq!(
-            PartitionIsolatorExec::partition_groups(6, 2),
+            PartitionIsolatorExec::partition_groups(6, 2, None),
             vec![vec![0, 1, 2], vec![3, 4, 5]]
         );
         assert_eq!(
-            PartitionIsolatorExec::partition_groups(6, 3),
+            PartitionIsolatorExec::partition_groups(6, 3, None),
             vec![vec![0, 1], vec![2, 3], vec![4, 5]]
         );
         assert_eq!(
-            PartitionIsolatorExec::partition_groups(6, 4),
+            PartitionIsolatorExec::partition_groups(6, 4, None),
             vec![vec![0, 1], vec![2, 3], vec![4], vec![5]]
         );
         assert_eq!(
-            PartitionIsolatorExec::partition_groups(10, 3),
+            PartitionIsolatorExec::partition_groups(10, 3, None),
             vec![vec![0, 1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]
         );
         assert_eq!(
-            PartitionIsolatorExec::partition_groups(10, 4),
+            PartitionIsolatorExec::partition_groups(10, 4, None),
             vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7], vec![8, 9]]
+        );
+    }
+
+    #[test]
+    fn test_custom_partition_groups() {
+        // Test unbalanced custom partition groups
+        let custom = vec![vec![0], vec![1, 2, 3]];
+        assert_eq!(
+            PartitionIsolatorExec::partition_groups(4, 2, Some(&custom)),
+            vec![vec![0], vec![1, 2, 3]]
+        );
+
+        // Test another unbalanced distribution
+        let custom = vec![vec![0, 1], vec![2], vec![3, 4, 5]];
+        assert_eq!(
+            PartitionIsolatorExec::partition_groups(6, 3, Some(&custom)),
+            vec![vec![0, 1], vec![2], vec![3, 4, 5]]
         );
     }
 }

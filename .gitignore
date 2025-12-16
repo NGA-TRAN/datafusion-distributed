@@ -4,3 +4,4 @@
 testdata/tpch/*
 !testdata/tpch/queries
 testdata/tpcds/data/
+.venv

@@ -478,10 +478,17 @@ fn display_plan(
     while let Some((plan, maybe_parent, parent_idx)) = queue.pop_front() {
         node_index += 1;
         if let Some(node) = plan.as_any().downcast_ref::<PartitionIsolatorExec>() {
+            // Extract custom partition groups if the node is Ready
+            let custom_groups = match node {
+                PartitionIsolatorExec::Ready(ready) => ready.custom_partition_groups.as_ref(),
+                PartitionIsolatorExec::Pending(_) => None,
+            };
+            
             isolator_partition_group = Some(PartitionIsolatorExec::partition_group(
                 node.input().output_partitioning().partition_count(),
                 task_i,
                 n_tasks,
+                custom_groups,
             ));
         }
         if let Some(parent) = maybe_parent {
